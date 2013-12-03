@@ -17,7 +17,7 @@ DEP[0]=md-addins
 DEP_NAME[0]=MDADDINS
 DEP_PATH[0]=${top_srcdir}/../md-addins
 DEP_MODULE[0]=git@github.com:xamarin/md-addins.git
-DEP_NEEDED_VERSION[0]=5f0de674d355caaf003c34cb9bc69ab8d909d350
+DEP_NEEDED_VERSION[0]=695f0391f45f4511135ed0e472a85cda44a00e18
 DEP_BRANCH_AND_REMOTE[0]="hybridTemplates origin/hybridTemplates"
 
 # heap-shot
