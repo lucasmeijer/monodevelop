@@ -294,7 +294,7 @@ namespace MonoDevelop.Ide
 			if ((bool)PropertyService.Get("SharpDevelop.LoadPrevProjectOnStartup", false)) {
 				var proj = DesktopService.RecentFiles.GetProjects ().FirstOrDefault ();
 				if (proj != null) { 
-					IdeApp.Workspace.OpenWorkspaceItem (proj.FileName).WaitForCompleted ();
+					IdeApp.Workspace.OpenWorkspaceItem (proj.FileName);
 				}
 			}
 			
@@ -306,6 +306,18 @@ namespace MonoDevelop.Ide
 				UpdateInstrumentationIcon ();
 			};
 			AutoTestService.NotifyEvent ("MonoDevelop.Ide.IdeStart");
+		}
+
+		// Lets us wait on previous workspace loads from OpenFiles
+		static IAsyncOperation workspaceLoading = null;
+		
+		// Waits on a pending workspace load if any files request bring-to-front
+		static void WaitForWorkspaceLoadIfBringingFilesToFront (IEnumerable<FileOpenInformation> files)
+		{
+			if (workspaceLoading != null && files.Any (f => f.Options.HasFlag (OpenDocumentOptions.BringToFront))) {
+				workspaceLoading.WaitForCompleted ();
+				workspaceLoading = null;
+			}
 		}
 
 		static void KeyBindingFailed (object sender, KeyBindingFailedEventArgs e)
@@ -328,37 +340,56 @@ namespace MonoDevelop.Ide
 				Initialized += onInit;
 				return;
 			}
-			
-			var filteredFiles = new List<FileOpenInformation> ();
+
+			WaitForWorkspaceLoadIfBringingFilesToFront(files);
+			var filteredFiles = files.Where(f => !(Services.ProjectService.IsWorkspaceItemFile(f.FileName) || Services.ProjectService.IsSolutionItemFile(f.FileName)));
+
+			EventHandler<WorkspaceItemEventArgs> loadFilteredFiles = null;
+			loadFilteredFiles = delegate
+			{
+				WaitForWorkspaceLoadIfBringingFilesToFront(filteredFiles);
+
+				foreach (var afile in filteredFiles)
+				{
+					try
+					{
+						Workbench.OpenDocument(afile.FileName, afile.Line, afile.Column, afile.Options);
+					}
+					catch (Exception ex)
+					{
+						LoggingService.LogError("Unhandled error opening file \"" + afile.FileName + "\"", ex);
+						MessageService.ShowException(ex, "Could not open file: " + afile.FileName);
+					}
+					Workspace.WorkspaceItemLoaded -= loadFilteredFiles;
+				}
+			};
+
+			Workspace.WorkspaceItemLoaded += loadFilteredFiles;
 			
 			//open the firsts sln/workspace file, and remove the others from the list
 		 	//FIXME: can we handle multiple slns?
-			bool foundSln = false;
 			foreach (var file in files) {
 				if (Services.ProjectService.IsWorkspaceItemFile (file.FileName) ||
 				    Services.ProjectService.IsSolutionItemFile (file.FileName)) {
-					if (!foundSln) {
-						try {
-							Workspace.OpenWorkspaceItem (file.FileName);
-							foundSln = true;
-						} catch (Exception ex) {
-							LoggingService.LogError ("Unhandled error opening solution/workspace \"" + file.FileName + "\"", ex);
-							MessageService.ShowException (ex, "Could not load solution: " + file.FileName);
-						}
+					
+					// Don't reload the currently open solution
+					if (null != Workspace.Items.FirstOrDefault (x =>
+						(x.FileName.FullPath.ToString ().Equals (file.FileName, StringComparison.OrdinalIgnoreCase) && !x.NeedsReload))) {
+						break;
 					}
-				} else {
-					filteredFiles.Add (file);
+
+					try {
+						workspaceLoading = Workspace.OpenWorkspaceItem (file.FileName);
+						break;
+					}
+					catch (Exception ex) {
+						LoggingService.LogError ("Unhandled error opening solution/workspace \"" + file.FileName + "\"", ex);
+						MessageService.ShowException (ex, "Could not load solution: " + file.FileName);
+					}
 				}
 			}
-			
-			foreach (var file in filteredFiles) {
-				try {
-					Workbench.OpenDocument (file.FileName, file.Line, file.Column, file.Options);
-				} catch (Exception ex) {
-					LoggingService.LogError ("Unhandled error opening file \"" + file.FileName + "\"", ex);
-					MessageService.ShowException (ex, "Could not open file: " + file.FileName);
-				}
-			}
+
+			loadFilteredFiles (null, null);
 			
 			Workbench.Present ();
 		}
